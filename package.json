@@ -4,8 +4,11 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "seed-demo": "node scripts/seed-demo.js",
+    "seed-demo:heavy": "node scripts/seed-demo.js 20000",
+    "seed-test": "node scripts/seed-test-data.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "Claude & Stefan Knol",
