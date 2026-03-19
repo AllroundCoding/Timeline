@@ -9,7 +9,7 @@ A local web app + MCP server for building and managing timelines for creative wo
 - **Entities** — Manage characters, factions, locations, and items linked to timeline events
 - **Documents** — Write and organize markdown documents with tags, categories, and @mention support
 - **REST API** — Express server backed by SQLite
-- **MCP Server** — Connect to Claude Desktop to build and query your timeline through conversation
+- **MCP Server** — Connect to any LLM to build and query your timeline through conversation
 
 ## Quick Start
 
@@ -45,11 +45,11 @@ Timeline events are organized as a **tree** — nodes can contain child nodes to
 - A color
 - Linked entities
 
-## MCP Server — Claude Desktop Integration
+## MCP Server — LLM Integration
 
-The MCP server lets you interact with your timeline from Claude chat.
+The MCP server lets you interact with your timeline from llm's with mcp support.
 
-### Setup
+### Claude Setup example
 
 Add this to your Claude Desktop config:
 
@@ -70,6 +70,7 @@ Add this to your Claude Desktop config:
 
 Then restart Claude Desktop.
 
+---
 ### MCP Tools
 
 | Tool | Description |
