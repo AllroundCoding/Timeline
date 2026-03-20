@@ -16,7 +16,7 @@ WORKDIR /app
 # Install dependencies
 COPY --chown=node:node package.json package-lock.json ./
 
-RUN npm ci --omit=dev
+RUN npm ci --omit dev
 
 # Copy source code
 COPY . /app
