@@ -1,5 +1,5 @@
 {
-  "name": "world-timelines",
+  "name": "timeweft",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -10,16 +10,24 @@
     "seed-test": "node scripts/seed-test-data.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
+  "keywords": [
+    "timeline",
+    "lore",
+    "storytelling",
+    "interactive",
+    "web application"
+  ],
   "author": "Claude & Stefan Knol",
   "license": "ISC",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
+    "@playwright/test": "^1.58.2",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.6.2",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.1.1",
     "nodemon": "^3.1.14",
     "uuid": "^13.0.0"
   }

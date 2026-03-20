@@ -1,5 +1,6 @@
 'use strict';
 const Database = require('better-sqlite3');
+const crypto   = require('crypto');
 const path     = require('path');
 const fs       = require('fs');
 const { decimalToDate, DEFAULT_CALENDAR } = require('../server/calendar');
@@ -11,8 +12,15 @@ const USERS_DIR    = path.join(DATA_DIR, 'users');
 // Legacy path (pre-auth migration)
 const LEGACY_DB_PATH = path.join(DATA_DIR, 'timeline.db');
 
+const TIMELINE_TABLES = [
+  'timeline_nodes', 'settings', 'calendars', 'documents',
+  'document_tags', 'entities', 'entity_node_links',
+  'folders', 'entity_doc_links', 'doc_node_links',
+  'entity_relationships', 'story_arcs', 'arc_node_links', 'arc_entity_links',
+];
+
 let _accountsDb = null;
-const _userDbs = new Map();
+const _timelineDbs = new Map(); // "userId/timelineId" → Database
 
 // ── Accounts DB (shared: users, api_keys, global_settings) ──────────────────
 
@@ -23,6 +31,8 @@ function getAccountsDb() {
   _accountsDb.pragma('journal_mode = WAL');
   _accountsDb.pragma('foreign_keys = ON');
   _initAccountsSchema(_accountsDb);
+  _migrateAccountsSchema(_accountsDb);
+  _migrateAllUsersToMultiTimeline(_accountsDb);
   return _accountsDb;
 }
 
@@ -74,29 +84,94 @@ function _initAccountsSchema(db) {
                      CHECK(perm_settings IN ('read','edit')),
       created_at     TEXT DEFAULT(datetime('now')),
       updated_at     TEXT DEFAULT(datetime('now')),
-      UNIQUE(owner_id, grantee_id)
+      UNIQUE(timeline_id, grantee_id)
     );
     CREATE INDEX IF NOT EXISTS idx_shares_grantee ON timeline_shares(grantee_id);
     CREATE INDEX IF NOT EXISTS idx_shares_owner ON timeline_shares(owner_id);
+
+    CREATE TABLE IF NOT EXISTS timelines (
+      id          TEXT PRIMARY KEY,
+      owner_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name        TEXT NOT NULL DEFAULT 'Default',
+      description TEXT,
+      created_at  TEXT DEFAULT(datetime('now')),
+      updated_at  TEXT DEFAULT(datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_timelines_owner ON timelines(owner_id);
   `);
 }
 
-// ── Per-user Timeline DB ────────────────────────────────────────────────────
+// Idempotent migration for accounts schema changes
+function _migrateAccountsSchema(db) {
+  const cols = db.prepare("PRAGMA table_info(timeline_shares)").all().map(r => r.name);
+  if (!cols.includes('timeline_id')) {
+    db.exec("ALTER TABLE timeline_shares ADD COLUMN timeline_id TEXT REFERENCES timelines(id) ON DELETE CASCADE");
+    db.exec("CREATE INDEX IF NOT EXISTS idx_shares_timeline_grantee ON timeline_shares(timeline_id, grantee_id)");
+  }
+  // Migrate unique constraint from (owner_id, grantee_id) to (timeline_id, grantee_id)
+  const indexes = db.prepare("PRAGMA index_list(timeline_shares)").all();
+  const hasOldUnique = indexes.some(idx => {
+    if (!idx.unique) return false;
+    const idxCols = db.prepare(`PRAGMA index_info("${idx.name}")`).all().map(c => c.name);
+    return idxCols.includes('owner_id') && idxCols.includes('grantee_id') && !idxCols.includes('timeline_id');
+  });
+  if (hasOldUnique) {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_shares_tl_grantee_unique ON timeline_shares(timeline_id, grantee_id)");
+  }
+}
 
-function getUserDb(userId) {
-  if (_userDbs.has(userId)) return _userDbs.get(userId);
+// Migrate existing single-timeline users to multi-timeline structure
+function _migrateAllUsersToMultiTimeline(accountsDb) {
+  if (!fs.existsSync(USERS_DIR)) return;
+  for (const userId of fs.readdirSync(USERS_DIR)) {
+    const oldPath = path.join(USERS_DIR, userId, 'timeline.db');
+    if (!fs.existsSync(oldPath)) continue;
+    // Check if user already has timelines
+    const existing = accountsDb.prepare('SELECT id FROM timelines WHERE owner_id = ?').get(userId);
+    if (existing) continue;
+    // Create timeline record
+    const tlId = crypto.randomUUID();
+    accountsDb.prepare('INSERT INTO timelines (id, owner_id, name) VALUES (?, ?, ?)').run(tlId, userId, 'Default');
+    // Move file to timelines subdirectory
+    const newDir = path.join(USERS_DIR, userId, 'timelines');
+    fs.mkdirSync(newDir, { recursive: true });
+    fs.renameSync(oldPath, path.join(newDir, `${tlId}.db`));
+    // Clean up WAL/SHM files
+    for (const suffix of ['-wal', '-shm']) {
+      try { fs.unlinkSync(oldPath + suffix); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
+    // Update existing shares to reference this timeline
+    accountsDb.prepare('UPDATE timeline_shares SET timeline_id = ? WHERE owner_id = ? AND timeline_id IS NULL')
+      .run(tlId, userId);
+  }
+}
 
-  const userDir = path.join(USERS_DIR, userId);
-  fs.mkdirSync(userDir, { recursive: true });
+// ── Per-timeline DB ─────────────────────────────────────────────────────────
 
-  const dbPath = path.join(userDir, 'timeline.db');
+function getTimelineDb(userId, timelineId) {
+  const key = `${userId}/${timelineId}`;
+  if (_timelineDbs.has(key)) return _timelineDbs.get(key);
+
+  const dir = path.join(USERS_DIR, userId, 'timelines');
+  fs.mkdirSync(dir, { recursive: true });
+
+  const dbPath = path.join(dir, `${timelineId}.db`);
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   _initTimelineSchema(db);
   _migrateSchema(db);
-  _userDbs.set(userId, db);
+  _timelineDbs.set(key, db);
   return db;
+}
+
+function closeTimelineDb(userId, timelineId) {
+  const key = `${userId}/${timelineId}`;
+  const db = _timelineDbs.get(key);
+  if (db) {
+    db.close();
+    _timelineDbs.delete(key);
+  }
 }
 
 function _initTimelineSchema(db) {
@@ -192,6 +267,76 @@ function _initTimelineSchema(db) {
       requested_at   TEXT DEFAULT(datetime('now')),
       UNIQUE(resource_type, resource_id)
     );
+
+    CREATE TABLE IF NOT EXISTS entity_doc_links (
+      entity_id  TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      doc_id     TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      role       TEXT DEFAULT '',
+      created_at TEXT DEFAULT(datetime('now')),
+      PRIMARY KEY (entity_id, doc_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS doc_node_links (
+      doc_id     TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      node_id    TEXT NOT NULL REFERENCES timeline_nodes(id) ON DELETE CASCADE,
+      role       TEXT DEFAULT '',
+      created_at TEXT DEFAULT(datetime('now')),
+      PRIMARY KEY (doc_id, node_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS folders (
+      id          TEXT PRIMARY KEY,
+      parent_id   TEXT REFERENCES folders(id) ON DELETE CASCADE,
+      name        TEXT NOT NULL,
+      folder_type TEXT NOT NULL CHECK(folder_type IN ('docs','entities')),
+      sort_order  INTEGER DEFAULT 0,
+      color       TEXT,
+      created_at  TEXT DEFAULT(datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_folders_type ON folders(folder_type);
+
+    CREATE TABLE IF NOT EXISTS entity_relationships (
+      id            TEXT PRIMARY KEY,
+      source_id     TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      target_id     TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      relationship  TEXT NOT NULL,
+      description   TEXT,
+      start_node_id TEXT REFERENCES timeline_nodes(id) ON DELETE SET NULL,
+      end_node_id   TEXT REFERENCES timeline_nodes(id) ON DELETE SET NULL,
+      metadata      TEXT DEFAULT '{}',
+      created_at    TEXT DEFAULT(datetime('now')),
+      UNIQUE(source_id, target_id, relationship)
+    );
+    CREATE INDEX IF NOT EXISTS idx_rel_source ON entity_relationships(source_id);
+    CREATE INDEX IF NOT EXISTS idx_rel_target ON entity_relationships(target_id);
+
+    CREATE TABLE IF NOT EXISTS story_arcs (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      description TEXT,
+      color       TEXT DEFAULT '#c97b2a',
+      status      TEXT DEFAULT 'active' CHECK(status IN ('planned','active','resolved','abandoned')),
+      sort_order  INTEGER DEFAULT 0,
+      metadata    TEXT DEFAULT '{}',
+      created_at  TEXT DEFAULT(datetime('now')),
+      updated_at  TEXT DEFAULT(datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS arc_node_links (
+      arc_id    TEXT NOT NULL REFERENCES story_arcs(id) ON DELETE CASCADE,
+      node_id   TEXT NOT NULL REFERENCES timeline_nodes(id) ON DELETE CASCADE,
+      position  INTEGER DEFAULT 0,
+      arc_label TEXT,
+      PRIMARY KEY (arc_id, node_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS arc_entity_links (
+      arc_id    TEXT NOT NULL REFERENCES story_arcs(id) ON DELETE CASCADE,
+      entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+      role      TEXT DEFAULT '',
+      PRIMARY KEY (arc_id, entity_id)
+    );
   `);
 }
 
@@ -259,28 +404,23 @@ function _migrateSchema(db) {
   // Add node_id to entities for 1:1 binding (entity IS the timeline node)
   const entCols = colNames('entities');
   if (!entCols.includes('node_id')) db.exec('ALTER TABLE entities ADD COLUMN node_id TEXT REFERENCES timeline_nodes(id)');
+  if (!entCols.includes('folder_id')) db.exec('ALTER TABLE entities ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL');
+
+  // Add folder_id to documents
+  const docCols = colNames('documents');
+  if (!docCols.includes('folder_id')) db.exec('ALTER TABLE documents ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL');
 }
 
 // ── Legacy migration: copy old timeline.db data into a user's DB ────────────
 
-function migrateLegacyDb(userId) {
+function migrateLegacyDb(userId, timelineId) {
   if (!fs.existsSync(LEGACY_DB_PATH)) return false;
 
   const legacyDb = new Database(LEGACY_DB_PATH, { readonly: true });
-  const userDb = getUserDb(userId);
-
-  const tables = [
-    'timeline_nodes',
-    'settings',
-    'calendars',
-    'documents',
-    'document_tags',
-    'entities',
-    'entity_node_links',
-  ];
+  const userDb = getTimelineDb(userId, timelineId);
 
   userDb.transaction(() => {
-    for (const table of tables) {
+    for (const table of TIMELINE_TABLES) {
       // Check table exists in legacy
       const exists = legacyDb.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table);
       if (!exists) continue;
@@ -368,11 +508,14 @@ function searchNodes(db, search, { parent_id, type, node_type, importance, date_
 
 module.exports = {
   getAccountsDb,
-  getUserDb,
+  getTimelineDb,
+  closeTimelineDb,
   migrateLegacyDb,
   getNodes,
   getNode,
   getDescendants,
   searchNodes,
+  TIMELINE_TABLES,
+  USERS_DIR,
   LEGACY_DB_PATH,
 };

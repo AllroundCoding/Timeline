@@ -159,9 +159,10 @@ function setupListeners() {
   setupCalendarEditor();
 
   // Context menu
-  document.addEventListener('click', hideCtxMenu);
+  document.addEventListener('click', () => { hideCtxMenu(); hideFolderCtxMenu(); });
   document.addEventListener('contextmenu', e => {
     if (!e.target.closest('[data-node-id]')) hideCtxMenu();
+    if (!e.target.closest('#ent-list') && !e.target.closest('#docs-list')) hideFolderCtxMenu();
   });
   document.getElementById('ctx-edit')?.addEventListener('click', () => {
     if (_ctxNode) openEditNodeModal(_ctxNode.id);
@@ -175,10 +176,31 @@ function setupListeners() {
     if (_ctxNode) deleteNode(_ctxNode.id);
     hideCtxMenu();
   });
-  document.getElementById('ctx-add-node')?.addEventListener('click', () => {
-    openAddNodeModal(_ctxLaneParentId);
+  document.getElementById('ctx-add-point')?.addEventListener('click', () => {
+    openAddNodeModal(_ctxLaneParentId, 'point');
     hideCtxMenu();
   });
+  document.getElementById('ctx-add-span')?.addEventListener('click', () => {
+    openAddNodeModal(_ctxLaneParentId, 'span');
+    hideCtxMenu();
+  });
+  document.getElementById('ctx-add-group')?.addEventListener('click', () => {
+    openAddNodeModal(null); // root level = group
+    hideCtxMenu();
+  });
+
+  // Right-click on root timeline area (outside lanes) to add a group
+  document.getElementById('tl-viewport')?.addEventListener('contextmenu', e => {
+    // Only fire if the click wasn't inside a lane row, lane label, or node element
+    if (e.target.closest('.gantt-lane-row') || e.target.closest('.gantt-lane-lbl') || e.target.closest('[data-node-id]')) return;
+    showCtxMenuRoot(e);
+  });
+
+  // Folder context menus for entity/doc sidebars
+  initFolderCtxMenu();
+
+  // Story arcs module
+  initArcsModule();
 
   // ResizeObserver: re-render when viewport size changes (window resize, panel open/close)
   // (fixes initial render when getBoundingClientRect fires before layout is final)
@@ -187,6 +209,7 @@ function setupListeners() {
     let prevW = 0;
     let resizeTimer = 0;
     new ResizeObserver(entries => {
+      if (SplitPane.isDragging) return;  // skip re-renders while dragging the divider
       const w = Math.round(entries[0].contentRect.width);
       if (w !== prevW) {
         prevW = w;
@@ -207,6 +230,24 @@ async function boot() {
     setupUserPanel();
     setupAdminPanel();
     setupSharingModule();
+    setupTimelineMgmt();
+
+    // Load timelines in parallel and determine active one
+    await Promise.all([loadMyTimelines(), loadSharedTimelines()]);
+
+    const savedTlId = localStorage.getItem('tl_active_timeline');
+    const matchOwn = MY_TIMELINES.find(t => t.id === savedTlId);
+    const matchShared = _sharedTimelines.find(s => s.timeline_id === savedTlId);
+    if (matchOwn) {
+      ACTIVE_TIMELINE = makeOwnTimeline(matchOwn);
+    } else if (matchShared) {
+      ACTIVE_TIMELINE = makeSharedTimeline(matchShared);
+    } else if (MY_TIMELINES.length) {
+      ACTIVE_TIMELINE = makeOwnTimeline(MY_TIMELINES[0]);
+    }
+    renderTimelineSwitcher();
+    updateShareBodyClasses();
+    updateShareBanner();
 
     // Docs module listeners (need DOM ready)
     document.getElementById('docs-new-btn')?.addEventListener('click', () => {
@@ -217,10 +258,11 @@ async function boot() {
     });
     document.getElementById('editor-save-btn')?.addEventListener('click', async () => {
       const payload = {
-        title:    document.getElementById('editor-title').value.trim() || 'Untitled',
-        category: document.getElementById('editor-category').value,
-        tags:     document.getElementById('editor-tags').value.split(',').map(t => t.trim()).filter(Boolean),
-        content:  document.getElementById('editor-content').value,
+        title:     document.getElementById('editor-title').value.trim() || 'Untitled',
+        category:  document.getElementById('editor-category').value,
+        tags:      document.getElementById('editor-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+        content:   document.getElementById('editor-content').value,
+        folder_id: document.getElementById('editor-folder').value || null,
       };
       const isNew  = !DocsState.editingId;
       const url    = isNew ? `${API}/docs` : `${API}/docs/${DocsState.editingId}`;
@@ -245,6 +287,7 @@ async function boot() {
         entity_type: document.getElementById('ent-ed-type').value,
         color:       document.getElementById('ent-ed-color').value,
         description: document.getElementById('ent-ed-desc').value,
+        folder_id:   document.getElementById('ent-ed-folder').value || null,
       };
       const isNew = !EntState.editingId;
       const url   = isNew ? `${API}/entities` : `${API}/entities/${EntState.editingId}`;
@@ -285,8 +328,7 @@ async function boot() {
       requestAnimationFrame(() => requestAnimationFrame(renderWorld));
     }
 
-    // Load shared timelines + pending deletions badge (non-blocking)
-    loadSharedTimelines();
+    // Update pending deletions badge (non-blocking)
     updatePendingBadge();
 
   } catch (err) {
