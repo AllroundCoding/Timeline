@@ -4,11 +4,19 @@
 
 A local web app + MCP server for building and managing timelines for creative worldbuilding projects. Track events, characters, factions, locations, and documents — all connected through a hierarchical, calendar-aware timeline.
 
+## Screenshots
+
+![Timeline View](docs/screenshots/timeline.png)
+![Entities & Relationships](docs/screenshots/entities.png)
+![Story Arcs](docs/screenshots/arcs.png)
+![Documents](docs/screenshots/docs.png)
+
 ## Features
 
 - **Interactive Timeline** — Gantt-style horizontal timeline with hierarchical nodes, zoom, filters, and a detail panel
 - **Custom Calendars** — Define your own time systems with custom eras, months, and date formats
-- **Entities** — Manage characters, factions, locations, and items linked to timeline events
+- **Entities & Relationships** — Manage characters, factions, locations, and items with family trees and relationship graphs
+- **Story Arcs** — Weave narrative threads through timeline events with arc overlays on the gantt
 - **Documents** — Write and organize markdown documents with tags, categories, and @mention support
 - **REST API** — Express server backed by SQLite
 - **MCP Server** — Connect to any LLM to build and query your timeline through conversation
