@@ -153,6 +153,9 @@ router.put('/user/profile', authenticate, (req, res) => {
     if (display_name !== undefined) fields.displayName = display_name;
 
     if (new_password) {
+      if (req.user.username?.toLowerCase() === 'demo') {
+        return res.status(403).json({ error: 'Cannot change the demo account password' });
+      }
       if (!current_password) {
         return res.status(400).json({ error: 'Current password is required to change password' });
       }
@@ -473,7 +476,12 @@ router.put('/admin/users/:id', authenticate, requireAdmin, (req, res) => {
     if (role !== undefined) fields.role = role;
     if (is_active !== undefined) fields.isActive = is_active;
     if (display_name !== undefined) fields.displayName = display_name;
-    if (password) fields.passwordHash = hashPassword(password);
+    if (password) {
+      if (target.username?.toLowerCase() === 'demo') {
+        return res.status(403).json({ error: 'Cannot change the demo account password' });
+      }
+      fields.passwordHash = hashPassword(password);
+    }
 
     const user = updateUser(db, req.params.id, fields);
     res.json(sanitizeUser(user));
