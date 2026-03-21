@@ -378,8 +378,11 @@ function buildGantt(nodes, existingGantt) {
   }
 
   if (reusing) {
-    // Atomic swap: replace track content without removing .gantt-timeline from DOM
-    tlWrap.replaceChildren(track);
+    // Swap track directly — avoids zero-width intermediate state that replaceChildren causes,
+    // so the browser never clamps scrollLeft to 0.
+    const oldTrack = tlWrap.querySelector('.gantt-track');
+    if (oldTrack) oldTrack.replaceWith(track);
+    else tlWrap.appendChild(track);
     // Replace header and labels in-place
     const oldHead = gantt.querySelector('.gantt-head');
     if (oldHead) oldHead.replaceWith(head);
