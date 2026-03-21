@@ -202,7 +202,7 @@ function _initTimelineSchema(db) {
       value TEXT
     );
     INSERT OR IGNORE INTO settings (key, value) VALUES
-      ('world_start', '-100000000'),
+      ('world_start', '-10000'),
       ('world_end',   '2500');
 
     CREATE TABLE IF NOT EXISTS calendars (
