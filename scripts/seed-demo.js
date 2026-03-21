@@ -298,18 +298,6 @@ const tx = db.transaction(() => {
     scatterPoints(sl.parentId, sl.startY, sl.endY, count, sl.title, sl.color);
   }
 
-  // Standalone root-level events
-  const standaloneEvents = [
-    { title: 'Creation of the World',      year: -10000, importance: 'critical', node_type: 'legend',    desc: 'The very beginning of recorded history.' },
-    { title: 'The First Dawn',             year: -9999,  importance: 'critical', node_type: 'legend',    desc: 'Light touches the world for the first time.' },
-    { title: 'The Prophecy Spoken',        year: 500,    importance: 'major',    node_type: 'religious', desc: 'A seer speaks words that will echo through the ages.' },
-    { title: 'The World Compass Invented', year: 1600,   importance: 'major',    node_type: 'milestone', desc: 'Navigation is forever changed.' },
-    { title: 'Present Day',               year: 4000,   importance: 'critical', node_type: 'milestone', desc: 'The current moment in the world.' },
-  ];
-  for (const ev of standaloneEvents) {
-    addPoint({ title: ev.title, year: ev.year, description: ev.desc, importance: ev.importance, node_type: ev.node_type });
-  }
-
   // ── Documents ──────────────────────────────────────────────────────────────
 
   const insDocs = db.prepare('INSERT INTO documents (id, timeline_id, title, category, content, created_at, updated_at) VALUES (?,?,?,?,?,?,?)');
